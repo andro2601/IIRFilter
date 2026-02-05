@@ -21,8 +21,9 @@ IIRFilterAudioProcessor::IIRFilterAudioProcessor()
                       #endif
                        .withOutput ("Output", AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ),
 #endif
+    parameters(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
 }
 
@@ -95,8 +96,15 @@ void IIRFilterAudioProcessor::changeProgramName (int index, const String& newNam
 //==============================================================================
 void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
+    ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = samplesPerBlock;
+    spec.numChannels = getMainBusNumOutputChannels();
+
+    filter.prepare(spec);
+    filter.reset();
+
+    updateCoefficients(sampleRate);
 }
 
 void IIRFilterAudioProcessor::releaseResources()
@@ -134,30 +142,90 @@ bool IIRFilterAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 void IIRFilterAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midiMessages)
 {
     ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumInputChannels = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
+        buffer.clear(i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
-    {
-        auto* channelData = buffer.getWritePointer (channel);
+    AudioBlock<float> block(buffer);
 
-        // ..do something to the data...
-    }
+    updateCoefficients(getSampleRate());
+    filter.process(ProcessContextReplacing<float>(block));
+    
+}
+
+void IIRFilterAudioProcessor::updateCoefficients(double sampleRate) {
+    float lpCutoff = parameters.getRawParameterValue("lpCutoff")->load();
+    float hpCutoff = parameters.getRawParameterValue("hpCutoff")->load();
+	float lpQ = parameters.getRawParameterValue("lpQ")->load();
+	float hpQ = parameters.getRawParameterValue("hpQ")->load();
+
+    if (lpCutoff == lastLpCutoff && hpCutoff == lastHpCutoff && lpQ == lastLpQ && hpQ == lastHpQ) return;
+
+    lastLpCutoff = lpCutoff;
+    lastHpCutoff = hpCutoff;
+	lastLpQ = lpQ;
+	lastHpQ = hpQ;
+
+    // 1. Pre-calculate intermediate variables
+    double LPomega = 2.0 * juce::MathConstants<double>::pi * lpCutoff / sampleRate;
+    double LPsin = std::sin(LPomega);
+    double LPcos = std::cos(LPomega);
+    double LPalpha = LPsin / (2.0 * lpQ);
+
+	double HPomega = 2.0 * juce::MathConstants<double>::pi * hpCutoff / sampleRate;
+	double HPsin = std::sin(HPomega);
+	double HPcos = std::cos(HPomega);
+	double HPalpha = HPsin / (2.0 * hpQ);
+
+    // 2. Calculate raw coefficients
+    double LPb0 = (1.0 - LPcos) / 2.0;
+    double LPb1 = 1.0 - LPcos;
+    double LPb2 = (1.0 - LPcos) / 2.0;
+    double LPa0 = 1.0 + LPalpha;
+    double LPa1 = -2.0 * LPcos;
+    double LPa2 = 1.0 - LPalpha;
+
+	double HPb0 = (1.0 + HPcos) / 2.0;
+	double HPb1 = -(1.0 + HPcos);
+	double HPb2 = (1.0 + HPcos) / 2.0;
+	double HPa0 = 1.0 + HPalpha;
+	double HPa1 = -2.0 * HPcos;
+    double HPa2 = 1.0 - HPalpha;
+
+    // 3. Normalize and set to JUCE filter
+    // We divide everything by a0 so that the feedback leading coefficient is 1.0
+    auto lpCoeffs = juce::dsp::IIR::Coefficients<float>(
+        static_cast<float>(LPb0 / LPa0),
+        static_cast<float>(LPb1 / LPa0),
+        static_cast<float>(LPb2 / LPa0),
+        1.0f, // a0 becomes 1
+        static_cast<float>(LPa1 / LPa0),
+        static_cast<float>(LPa2 / LPa0)
+    );
+
+    auto hpCoeffs = juce::dsp::IIR::Coefficients<float>(
+        static_cast<float>(HPb0 / HPa0),
+        static_cast<float>(HPb1 / HPa0),
+        static_cast<float>(HPb2 / HPa0),
+        1.0f, // a0 becomes 1
+        static_cast<float>(HPa1 / HPa0),
+        static_cast<float>(HPa2 / HPa0)
+	);
+
+    *filter.get<0>().state = lpCoeffs;
+    *filter.get<1>().state = hpCoeffs;
+}
+
+AudioProcessorValueTreeState::ParameterLayout IIRFilterAudioProcessor::createParameterLayout() {
+    std::vector<std::unique_ptr<RangedAudioParameter>> parameters;
+    parameters.push_back(std::make_unique<AudioParameterFloat>("lpCutoff", "Low Pass Cutoff Frequency", NormalisableRange<float>(10.f, 20000.f, 1.f, 0.5f, false), 20000.f, AudioParameterFloatAttributes()));
+    parameters.push_back(std::make_unique<AudioParameterFloat>("hpCutoff", "High Pass Cutoff Frequency", NormalisableRange<float>(10.f, 20000.f, 1.f, 0.5f, false), 10.f, AudioParameterFloatAttributes()));
+	parameters.push_back(std::make_unique<AudioParameterFloat>("lpQ", "Low Pass Q Factor", NormalisableRange<float>(0.1f, 10.f, 0.1f), 0.7071f, AudioParameterFloatAttributes()));
+	parameters.push_back(std::make_unique<AudioParameterFloat>("hpQ", "High Pass Q Factor", NormalisableRange<float>(0.1f, 10.f, 0.1f), 0.7071f, AudioParameterFloatAttributes()));
+
+    return { parameters.begin(), parameters.end() };
 }
 
 //==============================================================================
