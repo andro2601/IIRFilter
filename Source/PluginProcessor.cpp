@@ -101,7 +101,7 @@ void IIRFilterAudioProcessor::changeProgramName (int index, const String& newNam
 void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     // Initialize oversampler but don't worry about constant latency yet
-    oversampler = std::make_unique<Oversampling<double>>(2, 2, Oversampling<double>::filterHalfBandPolyphaseIIR);
+    oversampler = std::make_unique<Oversampling<double>>(2, 1, Oversampling<double>::filterHalfBandPolyphaseIIR);
     oversampler->initProcessing(samplesPerBlock);
 
     // Resize the workbench buffer (no audio processing here, just memory allocation)
@@ -109,8 +109,8 @@ void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     doubleBuffer.clear(); // Ensure it starts at zero!
 
     ProcessSpec spec;
-    spec.sampleRate = sampleRate * 4.0;
-    spec.maximumBlockSize = samplesPerBlock * 4;
+    spec.sampleRate = sampleRate * 2.0;
+    spec.maximumBlockSize = samplesPerBlock * 2;
     spec.numChannels = getMainBusNumOutputChannels();
 
     highPassChain.prepare(spec);
@@ -695,22 +695,22 @@ void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<d
 
     if (besselType == 4) {
         // Logic inside your updateCoefficients function:
-        internalSampleRate = sampleRate * 4.0;
+        internalSampleRate = sampleRate * 2.0;
 
         // 0. Adjust the frequencies to match the Bessel prototype's definition of "cutoff" at -3dB
         double kn = 1.0;
         switch (filterOrder) {
         case 2: // 1 Biquad(s)
-            kn = 0.734400887073410;
+            kn = 0.786151377741349;
             break;
         case 4: // 2 Biquad(s)
-            kn = 0.473055319257907;
+            kn = 0.660375184445269;
             break;
         case 6: // 3 Biquad(s)
-            kn = 0.369905240484611;
+            kn = 0.578680391859366;
             break;
         case 8: // 4 Biquad(s)
-            kn = 0.314503264273131;
+            kn = 0.517627635354890;
             break;
         }
 
@@ -786,25 +786,25 @@ std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getBesselPro
         // --- Bessel Analog Prototype Poles (Phase Normalized) ---
 		switch (filterOrder) {
         case 2: // 1 Biquad(s)
-            roots.push_back({ std::complex<double>(-1.500000000000000, 0.866025403784439), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.866025403784438, 0.500000000000000), std::complex<double>(0.0, 0.0) });
             break;
 
         case 4: // 2 Biquad(s)
-            roots.push_back({ std::complex<double>(-2.896210602820372, 0.867234128934503), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-2.103789397179627, 2.657418041856752), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.904758796788245, 0.270918733003875), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.657211171671883, 0.830161435004873), std::complex<double>(0.0, 0.0) });
             break;
 
         case 6: // 3 Biquad(s)
-            roots.push_back({ std::complex<double>(-4.248359395863364, 0.867509673231366), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-3.735708356325814, 2.626272311447126), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-2.515932247810821, 4.492672953653943), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.909390683047227, 0.185696439679305), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.799654185832829, 0.562171734693732), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.538552681669311, 0.961687688195428), std::complex<double>(0.0, 0.0) });
             break;
 
         case 8: // 4 Biquad(s)
-            roots.push_back({ std::complex<double>(-5.587886043263086, 0.867614445352787), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-5.204840790636881, 2.616175152642527), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-4.368289217202402, 4.414442500471539), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-2.838983948897632, 6.353911298604878), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.909683154665291, 0.141243797667142), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.847325080235933, 0.425901753827293), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.711138180848540, 0.718651731410840), std::complex<double>(0.0, 0.0) });
+            roots.push_back({ std::complex<double>(-0.462174041253212, 1.034388681126901), std::complex<double>(0.0, 0.0) });
             break;
         }
     }
