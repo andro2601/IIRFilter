@@ -29,23 +29,26 @@ private:
     // access the processor object that created it.
     IIRFilterAudioProcessor& audioProcessor;
 
-    // Sliders
-    Slider lpCutoffSlider;
+	// Parameter controls
     Slider hpCutoffSlider;
-	Slider lpQSlider;
-	Slider hpQSlider;
+    Slider lpCutoffSlider;
+    Slider filterOrderSlider;
+    ComboBox approximationMenu;
+    juce::ToggleButton bypassHpButton;
+    juce::ToggleButton bypassLpButton;
 
     // Labels
-    Label lpLabel;
-    Label hpLabel;
-	Label lpQLabel;
-	Label hpQLabel;
+    Label hpCutoffLabel;
+    Label lpCutoffLabel;
+	Label filterOrderLabel;
 
     // Attachments to sync GUI with parameters
-    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> lpCutoffAttachment;
     std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> hpCutoffAttachment;
-	std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> lpQAttachment;
-	std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> hpQAttachment;
+    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> lpCutoffAttachment;
+    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> filterOrderAttachment;
+	std::unique_ptr<AudioProcessorValueTreeState::ComboBoxAttachment> approximationAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassHpAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassLpAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IIRFilterAudioProcessorEditor)
 };

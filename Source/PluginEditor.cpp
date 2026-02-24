@@ -13,45 +13,44 @@
 IIRFilterAudioProcessorEditor::IIRFilterAudioProcessorEditor (IIRFilterAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    // Low-Pass Filter Slider
-    lpCutoffSlider.setSliderStyle(Slider::Rotary);
-    lpCutoffSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 80, 20);
-    addAndMakeVisible(lpCutoffSlider);
-
-    lpLabel.setText("Low-Pass Cutoff", dontSendNotification);
-    lpLabel.attachToComponent(&lpCutoffSlider, false);
-	lpLabel.setJustificationType(juce::Justification::centredBottom);
-    addAndMakeVisible(lpLabel);
-
     // High-Pass Filter Slider
     hpCutoffSlider.setSliderStyle(Slider::Rotary);
-    hpCutoffSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 80, 20);
+    hpCutoffSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 70, 20);
     addAndMakeVisible(hpCutoffSlider);
 
-    hpLabel.setText("High-Pass Cutoff", dontSendNotification);
-    hpLabel.attachToComponent(&hpCutoffSlider, false);
-    hpLabel.setJustificationType(juce::Justification::centredBottom);
-    addAndMakeVisible(hpLabel);
+    hpCutoffLabel.setText("High-Pass Cutoff", dontSendNotification);
+    //hpCutoffLabel.attachToComponent(&hpCutoffSlider, false);
+    hpCutoffLabel.setJustificationType(Justification::centred);
+    addAndMakeVisible(hpCutoffLabel);
 
-	// Low-Pass Q Slider
-	lpQSlider.setSliderStyle(Slider::Rotary);
-	lpQSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 80, 20);
-	addAndMakeVisible(lpQSlider);
+    // Low-Pass Filter Slider
+    lpCutoffSlider.setSliderStyle(Slider::Rotary);
+    lpCutoffSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 70, 20);
+    addAndMakeVisible(lpCutoffSlider);
 
-	lpQLabel.setText("Low-Pass Q", dontSendNotification);
-	lpQLabel.attachToComponent(&lpQSlider, false);
-	lpQLabel.setJustificationType(juce::Justification::centredBottom);
-	addAndMakeVisible(lpQLabel);
+    lpCutoffLabel.setText("Low-Pass Cutoff", dontSendNotification);
+    //lpCutoffLabel.attachToComponent(&lpCutoffSlider, false);
+    lpCutoffLabel.setJustificationType(Justification::centred);
+    addAndMakeVisible(lpCutoffLabel);
 
-	// High-Pass Q Slider
-	hpQSlider.setSliderStyle(Slider::Rotary);
-	hpQSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 80, 20);
-	addAndMakeVisible(hpQSlider);
 
-	hpQLabel.setText("High-Pass Q", dontSendNotification);
-	hpQLabel.attachToComponent(&hpQSlider, false);
-    hpQLabel.setJustificationType(juce::Justification::centredBottom);
-	addAndMakeVisible(hpQLabel);
+	// filterOrderSlider
+    filterOrderSlider.setSliderStyle(Slider::Rotary);
+    filterOrderSlider.setTextBoxStyle(Slider::TextBoxBelow, false, 50, 20);
+	addAndMakeVisible(filterOrderSlider);
+
+	filterOrderLabel.setText("Filter Order", dontSendNotification);
+	filterOrderLabel.setJustificationType(Justification::centred);
+	addAndMakeVisible(filterOrderLabel);
+
+    // approximationMenu
+	addAndMakeVisible(approximationMenu);
+
+    // Bypass buttons
+    addAndMakeVisible(bypassHpButton);
+    bypassHpButton.setButtonText("Bypass HP");
+    addAndMakeVisible(bypassLpButton);
+    bypassLpButton.setButtonText("Bypass LP");
 
     // Attach sliders to parameters
     lpCutoffAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment>(
@@ -60,18 +59,25 @@ IIRFilterAudioProcessorEditor::IIRFilterAudioProcessorEditor (IIRFilterAudioProc
     hpCutoffAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.parameters, "hpCutoff", hpCutoffSlider);
 
-    lpQAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment>(
-		audioProcessor.parameters, "lpQ", lpQSlider);
+    filterOrderAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment>(
+		audioProcessor.parameters, "filterOrder", filterOrderSlider);
 
-	hpQAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment>(
-		audioProcessor.parameters, "hpQ", hpQSlider);
+	approximationMenu.addItemList(audioProcessor.parameters.getParameter("approximation")->getAllValueStrings(), 1);
+    approximationAttachment = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment>(
+		audioProcessor.parameters, "approximation", approximationMenu);
+
+    bypassHpAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "bypassHp", bypassHpButton);
+
+    bypassLpAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "bypassLp", bypassLpButton);
 
     getLookAndFeel().setColour(Slider::thumbColourId, Colours::cyan);
     getLookAndFeel().setColour(Slider::rotarySliderOutlineColourId, Colour(0xFF2d2d2d));
 
     // Make sure that before the constructor has finished, you've set the
     // editor's size to whatever you need it to be.
-    setSize(400, 300);
+    setSize(450, 400);
 }
 
 IIRFilterAudioProcessorEditor::~IIRFilterAudioProcessorEditor()
@@ -91,28 +97,38 @@ void IIRFilterAudioProcessorEditor::paint (Graphics& g)
 
 void IIRFilterAudioProcessorEditor::resized()
 {
-    // Layout positions
-    int sliderWidth = 150;
-    int sliderHeight = 150;
+    auto area = getLocalBounds().reduced(20);
 
-    auto bounds = getLocalBounds().reduced(10);
-    auto hpfArea = bounds.removeFromLeft(bounds.getWidth() / 2).reduced(10);
-    auto lpfArea = bounds.reduced(10); // The remaining right side
+    // Header/Menu Area
+    auto topRow = area.removeFromTop(40);
+    approximationMenu.setBounds(topRow.withSizeKeepingCentre(200, 30));
 
-    // --- Helper function logic for HPF Area ---
-    hpLabel.setBounds(hpfArea.removeFromTop(20));      // Title at the top
+    area.removeFromTop(10); // Spacer
 
-    auto hpQArea = hpfArea.removeFromBottom(90);         // Reserve space at bottom for Q
-    hpCutoffSlider.setBounds(hpfArea);                   // Freq takes all remaining middle space
+    // --- MAIN SLIDERS (Large) ---
+    auto mainSliderArea = area.removeFromTop(200);
+    auto hpArea = mainSliderArea.removeFromLeft(mainSliderArea.getWidth() / 2).reduced(5, 0);
+    auto lpArea = mainSliderArea.reduced(5, 0);
 
-    hpQLabel.setBounds(hpQArea.removeFromTop(30));       // Q Label 
-    hpQSlider.setBounds(hpQArea);                        // Q Slider stays in the bottom box
+    // HP Layout
+    auto hpHeader = hpArea.removeFromTop(25);
+    hpCutoffLabel.setBounds(hpHeader);
+    bypassHpButton.setBounds(hpHeader.removeFromLeft(30)); // Small height, centered horizontal padding
+    hpCutoffSlider.setBounds(hpArea);
 
-    // --- Repeat similar logic for LPF Area ---
-	lpLabel.setBounds(lpfArea.removeFromTop(20));      // Title at the top
+    // LP Layout
+    auto lpHeader = lpArea.removeFromTop(25);
+    lpCutoffLabel.setBounds(lpHeader);
+    bypassLpButton.setBounds(lpHeader.removeFromLeft(30)); // Small height, centered horizontal padding
+    lpCutoffSlider.setBounds(lpArea);
 
-    auto lpQArea = lpfArea.removeFromBottom(90);      // Reserve space at bottom for Q
-    lpCutoffSlider.setBounds(lpfArea);                 // Freq takes all remaining middle space
-    lpQLabel.setBounds(lpQArea.removeFromTop(30));    // Q Label 
-	lpQSlider.setBounds(lpQArea);                    // Q Slider stays in the bottom box
+    area.removeFromTop(30); // Spacer
+
+    // --- SECONDARY CONTROLS (Small) ---
+    // We center the smaller order slider at the bottom
+    auto bottomArea = area.removeFromTop(100);
+    auto orderArea = bottomArea.withSizeKeepingCentre(80, 100); // Narrower width = "Smaller" look
+
+    filterOrderLabel.setBounds(orderArea.removeFromTop(20));
+    filterOrderSlider.setBounds(orderArea);
 }
