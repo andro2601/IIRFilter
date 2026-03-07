@@ -172,9 +172,7 @@ void IIRFilterAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffe
 
     updateCoefficients(getSampleRate());
 
-    // -----------------------------------------------------------
-    // 1. UPSample to 64-bit (Float -> Double)
-    // -----------------------------------------------------------
+    // Upsample to 64-bit (Float -> Double)
     for (int ch = 0; ch < numChannels; ++ch)
     {
         auto* floatRead = buffer.getReadPointer(ch);
@@ -185,14 +183,13 @@ void IIRFilterAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffe
         }
     }
     
-    // 1. Check if the buffer is silent
+    // Check if the buffer is silent
     if (buffer.getMagnitude(0, numSamples) < 0.000001f) // Roughly -120dB
     {
         // If the buffer is silent, we might still be 'ringing'
-        // For a simple demo, you can check if we've been silent for a few blocks
         if (++silentBlockCount > 100)
         {
-            return; // SKIP THE FILTER MATH
+            return; // Skip the filter math
         }
     }
     else
@@ -204,29 +201,21 @@ void IIRFilterAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffe
         doubleBuffer.getNumChannels(),
         numSamples);
 
-    /*
-    const String logText = (doubleBuffer.getNumSamples() == numSamples) ? "yes" : "no";
-    Logger::writeToLog(logText);
-    */
-
     auto hpIsBypassed = parameters.getRawParameterValue("bypassHp")->load();
     auto lpIsBypassed = parameters.getRawParameterValue("bypassLp")->load();
 
-    // 1. Get current approximation choice
     int approxType = static_cast<int>(parameters.getRawParameterValue("approximation")->load());
     if (approxType == 4) // "Bessel 0Hz"
     {
-        // UPSAMPLE: Moves audio to 2x or 4x rate
         auto oversampledBlock = oversampler->processSamplesUp(doubleBlock);
 
-        // PROCESS: Ensure your coefficient math uses (sampleRate * factor)
         if (!hpIsBypassed) {
             highPassChain.process(ProcessContextReplacing<double>(oversampledBlock));
         }
         if (!lpIsBypassed) {
             lowPassChain.process(ProcessContextReplacing<double>(oversampledBlock));
         }
-        // DOWNSAMPLE: Filters out aliasing and returns to base rate
+
         oversampler->processSamplesDown(doubleBlock);
     }
     else
@@ -241,8 +230,7 @@ void IIRFilterAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffe
         }	
     }
     
-    // 3. Cast back to 32-bit (Double -> Float) for the DAW
-    // -----------------------------------------------------------
+    // Cast back to 32-bit (Double -> Float) for the DAW
     for (int ch = 0; ch < numChannels; ++ch)
     {
         auto* doubleRead = doubleBuffer.getReadPointer(ch);
@@ -292,10 +280,10 @@ void IIRFilterAudioProcessor::updateCoefficients(double sampleRate) {
         case 3: // Elliptic
 			ellipticCoefficients(lpCoeffs, hpCoeffs, lpCutoffDouble, hpCutoffDouble, filterOrder, sampleRate);
             break;
-		case 4: // Bessel 1
+		case 4: // Bessel 0Hz
 			besselCoefficients(lpCoeffs, hpCoeffs, lpCutoffDouble, hpCutoffDouble, filterOrder, sampleRate);
             break;
-        case 5: // Bessel 2
+        case 5: // Bessel -3dB
 			besselCoefficients(lpCoeffs, hpCoeffs, lpCutoffDouble, hpCutoffDouble, filterOrder, sampleRate);
             break;
         default:
@@ -342,7 +330,7 @@ void IIRFilterAudioProcessor::updateCoefficients(double sampleRate) {
 }
 
 void IIRFilterAudioProcessor::butterworthCoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate) {
-    // 1. Pre-calculate intermediate variables
+    // Pre-calculate intermediate variables
     double LPomega = 2.0 * MathConstants<double>::pi * lpCutoff / sampleRate;
     double LPsin = std::sin(LPomega);
     double LPcos = std::cos(LPomega);
@@ -351,7 +339,7 @@ void IIRFilterAudioProcessor::butterworthCoefficients(std::vector<IIR::Coefficie
     double HPsin = std::sin(HPomega);
     double HPcos = std::cos(HPomega);
 
-    // 2. Calculate raw coefficients
+    // Calculate raw coefficients
     double LPb0 = (1.0 - LPcos) / 2.0;
     double LPb1 = 1.0 - LPcos;
     double LPb2 = (1.0 - LPcos) / 2.0;
@@ -396,18 +384,18 @@ void IIRFilterAudioProcessor::butterworthCoefficients(std::vector<IIR::Coefficie
 
 void IIRFilterAudioProcessor::chebyshevICoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
-    // 1. Setup Ripple (1.0 dB is a standard, musical choice for steepness)
+    // Setup Ripple (1.0 dB is a standard, musical choice for steepness)
     const double rippleDB = 1.0;
     const double epsilon = std::sqrt(std::pow(10.0, rippleDB / 10.0) - 1.0);
     const double mu = (1.0 / filterOrder) * std::asinh(1.0 / epsilon);
     const double a_ellipse = std::sinh(mu);
     const double b_ellipse = std::cosh(mu);
 
-    // 2. Pre-warp the target frequencies for the Bilinear Transform
+    // Pre-warp the target frequencies for the Bilinear Transform
     const double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate);
     const double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate);
 
-    // 3. Loop through the pole pairs (Each pair creates one biquad)
+    // Loop through the pole pairs (Each pair creates one biquad)
     int numBiquads = filterOrder / 2;
     for (int k = 1; k <= numBiquads; ++k)
     {
@@ -485,7 +473,7 @@ void IIRFilterAudioProcessor::chebyshevICoefficients(std::vector<IIR::Coefficien
 
 void IIRFilterAudioProcessor::chebyshevIICoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
-    // 1. Setup Stopband Attenuation (e.g., 40dB of rejection)
+    // Setup Stopband Attenuation (e.g., 40dB of rejection)
     const double stopbandAttenDB = 40.0 + 10.0 * filterOrder/2;
 
     // The epsilon calculation is inverted for Type II
@@ -494,7 +482,7 @@ void IIRFilterAudioProcessor::chebyshevIICoefficients(std::vector<IIR::Coefficie
     const double a_ellipse = std::sinh(mu);
     const double b_ellipse = std::cosh(mu);
 
-    // 2. Pre-warp frequencies
+    // Pre-warp frequencies
     const double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate);
     const double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate);
 
@@ -503,7 +491,7 @@ void IIRFilterAudioProcessor::chebyshevIICoefficients(std::vector<IIR::Coefficie
     {
         double angle = (MathConstants<double>::pi * (2.0 * k - 1.0)) / (2.0 * filterOrder);
 
-        // --- 3. Calculate Analog Poles and Zeros ---
+        // --- Calculate Analog Poles and Zeros ---
 
         // Base Type I Pole
         double sigma = -a_ellipse * std::sin(angle);
@@ -578,10 +566,10 @@ void IIRFilterAudioProcessor::chebyshevIICoefficients(std::vector<IIR::Coefficie
 
 void IIRFilterAudioProcessor::ellipticCoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
-    // 1. Fetch the correct prototype roots for this specific order
+    // Fetch the correct prototype roots for this specific order
     auto proto = getEllipticProto(filterOrder);
 
-    // 2. Pre-warp frequencies
+    // Pre-warp frequencies
     double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate);
     double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate);
 
@@ -589,7 +577,7 @@ void IIRFilterAudioProcessor::ellipticCoefficients(std::vector<IIR::Coefficients
     const double rippleDB = 2.0;
     int stageIndex = 0;
 
-    // 3. Loop over the returned roots (1 loop for 2nd order, 4 loops for 8th order)
+    // Loop over the returned roots (1 loop for 2nd order, 4 loops for 8th order)
     for (const auto& root : proto)
     {
         // =======================
@@ -645,7 +633,7 @@ void IIRFilterAudioProcessor::ellipticCoefficients(std::vector<IIR::Coefficients
         }
         stageIndex++;
 
-        // 4. Push final coefficients to the vectors
+        // Push final coefficients to the vectors
         lpCoeffs.emplace_back(
             lpB0, lpB1, lpB2,
             1.0, lpA1, lpA2);
@@ -657,10 +645,8 @@ void IIRFilterAudioProcessor::ellipticCoefficients(std::vector<IIR::Coefficients
 }
 
 // =========================================================
-// 1. THE LOOKUP TABLE (Normalized for 1dB Pass / 60dB Stop)
+// ELLIPTIC LOOKUP TABLE (Normalized for 1dB Pass / 50dB Stop)
 // =========================================================
-// In a full plugin, you would have tables for Order 2, 4, 6, 8.
-// Here is the data for a standard 4th Order "Brickwall" EQ.
 std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getEllipticProto(int filterOrder) {
     std::vector<IIRFilterAudioProcessor::Root> roots;
     switch (filterOrder) {
@@ -694,10 +680,9 @@ void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<d
 	double internalSampleRate = sampleRate;
 
     if (besselType == 4) {
-        // Logic inside your updateCoefficients function:
         internalSampleRate = sampleRate * 4.0;
 
-        // 0. Adjust the frequencies to match the Bessel prototype's definition of "cutoff" at -3dB
+        // Adjust the frequencies to match the Bessel prototype's definition of "cutoff" at -3dB
         double kn = 1.0;
         switch (filterOrder) {
         case 2: // 1 Biquad(s)
@@ -718,14 +703,12 @@ void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<d
         lpCutoff *= kn;
     }
 
-    // 1. Fetch the Phase-Normalized Bessel poles
+    // Fetch the Phase-Normalized Bessel poles
     auto proto = getBesselProto(filterOrder);
 
-    // 2. Pre-warp frequencies for Bilinear Transform
+    // Pre-warp frequencies for Bilinear Transform
     double lpW = std::tan(MathConstants<double>::pi * lpCutoff / internalSampleRate);
-    //lpW *= kn;
     double hpW = std::tan(MathConstants<double>::pi * hpCutoff / internalSampleRate);
-    //hpW /= kn;
 
     for (const auto& root : proto)
     {
@@ -739,7 +722,7 @@ void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<d
         double lpA1 = -2.0 * lpZPole.real();
         double lpA2 = std::norm(lpZPole);
 
-        // Standard Low-Pass Zeros: (1 + z^-1)^2
+        // Standard Low-Pass Zeros: (1 + z^(-1))^2
         double lpB0 = 1.0;
         double lpB1 = 2.0;
         double lpB2 = 1.0;
@@ -763,7 +746,7 @@ void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<d
         double hpA1 = -2.0 * hpZPole.real();
         double hpA2 = std::norm(hpZPole);
 
-        // Standard High-Pass Zeros: (1 - z^-1)^2
+        // Standard High-Pass Zeros: (1 - z^(-1))^2
         double hpB0 = 1.0;
         double hpB1 = -2.0;
         double hpB2 = 1.0;
@@ -778,6 +761,9 @@ void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<d
     }
 }
 
+// ===================
+// BESSEL LOOKUP TABLE
+// ===================
 std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getBesselProto(int filterOrder)
 {
     std::vector<IIRFilterAudioProcessor::Root> roots;
@@ -812,22 +798,22 @@ std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getBesselPro
     else if (besselType == 5) {
         // --- Frequency-Normalized Bessel Prototype Poles (-3dB at 1 rad/s) ---
         switch (filterOrder) {
-        case 2: // 1 Biquad Stage(s)
+        case 2: // 1 Biquad(s)
             roots.push_back({ std::complex<double>(-1.101601330592161, 0.636009824757034), std::complex<double>(0.0, 0.0) });
             break;
 
-        case 4: // 2 Biquad Stage(s)
+        case 4: // 2 Biquad(s)
             roots.push_back({ std::complex<double>(-1.370067830551442, 0.410249717493751), std::complex<double>(0.0, 0.0) });
             roots.push_back({ std::complex<double>(-0.995208764350272, 1.257105739454664), std::complex<double>(0.0, 0.0) });
             break;
 
-        case 6: // 3 Biquad Stage(s)
+        case 6: // 3 Biquad(s)
             roots.push_back({ std::complex<double>(-1.571490403616031, 0.320896374222624), std::complex<double>(0.0, 0.0) });
             roots.push_back({ std::complex<double>(-1.381858097596563, 0.971471890711571), std::complex<double>(0.0, 0.0) });
             roots.push_back({ std::complex<double>(-0.930656522946859, 1.661863268942591), std::complex<double>(0.0, 0.0) });
             break;
 
-        case 8: // 4 Biquad Stage(s)
+        case 8: // 4 Biquad(s)
             roots.push_back({ std::complex<double>(-1.757408400401652, 0.272867575102233), std::complex<double>(0.0, 0.0) });
             roots.push_back({ std::complex<double>(-1.636939418126887, 0.822795625139699), std::complex<double>(0.0, 0.0) });
             roots.push_back({ std::complex<double>(-1.373841217637376, 1.388356575877562), std::complex<double>(0.0, 0.0) });
@@ -880,28 +866,28 @@ AudioProcessorEditor* IIRFilterAudioProcessor::createEditor()
 //==============================================================================
 void IIRFilterAudioProcessor::getStateInformation (MemoryBlock& destData)
 {
-    // 1. Create an XML element to hold your data
+    // Create an XML element to hold your data
     auto state = parameters.copyState();
     std::unique_ptr<XmlElement> xml(state.createXml());
 
-    // 2. Convert that XML to a binary block for the DAW
+    // Convert that XML to a binary block for the DAW
     copyXmlToBinary(*xml, destData);
 }
 
 void IIRFilterAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // 1. Convert the binary block back into XML
+    // Convert the binary block back into XML
     std::unique_ptr<XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
 
     if (xmlState.get() != nullptr)
     {
-        // 2. Check if the XML tag matches your ValueTree name
+        // Check if the XML tag matches your ValueTree name
         if (xmlState->hasTagName(parameters.state.getType()))
         {
-            // 3. Update the APVTS, which automatically updates your sliders
+            // Update the APVTS, which automatically updates your sliders
             parameters.replaceState(ValueTree::fromXml(*xmlState));
 
-			// 4. Update the filter coefficients based on the restored parameters
+			// Update the filter coefficients based on the restored parameters
             updateCoefficients(getSampleRate());
         }
     }
