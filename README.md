@@ -1,4 +1,4 @@
-# IIR Low Pass and High Pass filters
+# IIR Filter
 A high-performance, precision IIR high-pass and low-pass filter plugin built with the JUCE framework. This plugin offers 6 different analog filter approximations, utilizing the Bilinear Transform with exact frequency pre-warping.
 
 To ensure mathematical accuracy and stability, the complex pole-zero prototypes for Elliptic and Bessel filters are pre-calculated using custom Python scripts (scipy.signal) and embedded directly into the C++ DSP code as Look-Up Tables (LUTs).
