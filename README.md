@@ -31,9 +31,12 @@ Prerequisites:
 ## HOWTO
 Clone the JUCE framework (if you don't have it):
 - git clone https://github.com/juce-framework/JUCE.git
+
 Clone this repository
 - git clone https://github.com/andro2601/IIRFilter.git
+
 Open Projucer
 - your\path\to\JUCE\extras\Projucer\Builds\VisualStudio2026\x64\Debug\App\Projucer.exe
+
 In Projucer, open the IIRFilter.jucer file from this repository and choose the desired exporter (default: Visual Studio 2026).
 From there, build the plugin in Release mode either as a Standalone application or as VST3/AAX.
