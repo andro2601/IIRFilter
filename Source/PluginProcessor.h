@@ -136,6 +136,7 @@ private:
 	int lastApproximationType = -1; // Store last used approximation type index
 
 	int silentBlockCount = 0; // Counter for consecutive silent blocks
+    int currentOversamplingRatio = 1;
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IIRFilterAudioProcessor)
 };

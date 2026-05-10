@@ -100,17 +100,47 @@ void IIRFilterAudioProcessor::changeProgramName (int index, const String& newNam
 //==============================================================================
 void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Initialize oversampler but don't worry about constant latency yet
-    oversampler = std::make_unique<Oversampling<double>>(2, 2, Oversampling<double>::filterHalfBandPolyphaseIIR);
-    oversampler->initProcessing(samplesPerBlock);
+    // 1. Dinamičko određivanje faktora oversamplinga
+    int oversamplingFactorLog2 = 0;
+
+    if (sampleRate >= 88100.0) {
+        oversamplingFactorLog2 = 0; // Ne treba oversampling (1x)
+        currentOversamplingRatio = 1;
+    }
+    else if (sampleRate >= 44100.0) {
+        oversamplingFactorLog2 = 1; // 2x oversampling (2^1 = 2)
+        currentOversamplingRatio = 2;
+    }
+    else {
+        oversamplingFactorLog2 = 2; // 4x oversampling (2^2 = 4) za ultra niske SR
+        currentOversamplingRatio = 4;
+    }
+
+    // 2. Inicijalizacija Oversamplera (samo ako je ratio > 1)
+    if (currentOversamplingRatio > 1) {
+        oversampler = std::make_unique<Oversampling<double>>(
+            getMainBusNumOutputChannels(),
+            oversamplingFactorLog2,
+            Oversampling<double>::filterHalfBandPolyphaseIIR
+        );
+        oversampler->initProcessing(samplesPerBlock);
+    }
+    else {
+        // Ako je ratio 1, uništavamo objekt da oslobodimo memoriju i izbjegnemo greške
+        oversampler.reset();
+    }
 
     // Resize the workbench buffer (no audio processing here, just memory allocation)
     doubleBuffer.setSize(getMainBusNumOutputChannels(), samplesPerBlock);
     doubleBuffer.clear(); // Ensure it starts at zero!
 
+    // 4. Priprema filter chainova s OVERSAMPLED vrijednostima
+    double oversampledSampleRate = sampleRate * currentOversamplingRatio;
+    int maxOversampledBlockSize = samplesPerBlock * currentOversamplingRatio;
+
     ProcessSpec spec;
-    spec.sampleRate = sampleRate * 4.0;
-    spec.maximumBlockSize = samplesPerBlock * 4;
+    spec.sampleRate = oversampledSampleRate;
+    spec.maximumBlockSize = maxOversampledBlockSize;
     spec.numChannels = getMainBusNumOutputChannels();
 
     highPassChain.prepare(spec);
@@ -118,10 +148,19 @@ void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     lowPassChain.prepare(spec);
     lowPassChain.reset();
 
-    smoothedLpCutoff.reset(sampleRate, 0.001); // 1ms glide
-	smoothedHpCutoff.reset(sampleRate, 0.001); // 1ms glide
+    smoothedLpCutoff.reset(oversampledSampleRate, 0.001); // 1ms glide
+	smoothedHpCutoff.reset(oversampledSampleRate, 0.001); // 1ms glide
 
-    updateCoefficients(sampleRate);
+    // OBAVEZNO proslijedi oversampled rate u koeficijente!
+    updateCoefficients(oversampledSampleRate);
+
+    if (oversampler != nullptr) {
+        // JUCE oversampler sam zna koliko sampleova kašnjenja unosi
+        setLatencySamples(oversampler->getLatencyInSamples());
+    }
+    else {
+        setLatencySamples(0);
+    }
 }
 
 void IIRFilterAudioProcessor::releaseResources()
@@ -170,7 +209,9 @@ void IIRFilterAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffe
     int numSamples = buffer.getNumSamples();
     int numChannels = buffer.getNumChannels();
 
-    updateCoefficients(getSampleRate());
+    // KLJUČNO: updateCoefficients mora dobiti interni sample rate
+    double internalSampleRate = getSampleRate() * currentOversamplingRatio;
+    updateCoefficients(internalSampleRate);
 
     // Upsample to 64-bit (Float -> Double)
     for (int ch = 0; ch < numChannels; ++ch)
@@ -204,30 +245,27 @@ void IIRFilterAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffe
     auto hpIsBypassed = parameters.getRawParameterValue("bypassHp")->load();
     auto lpIsBypassed = parameters.getRawParameterValue("bypassLp")->load();
 
-    int approxType = static_cast<int>(parameters.getRawParameterValue("approximation")->load());
-    if (approxType == 4) // "Bessel 0Hz"
+    // ==========================================
+    // AUDIO PROCESIRANJE (Dinamička Putanja)
+    // ==========================================
+    if (currentOversamplingRatio > 1 && oversampler != nullptr)
     {
+        // PUTANJA S OVERSAMPLINGOM
         auto oversampledBlock = oversampler->processSamplesUp(doubleBlock);
+        auto context = ProcessContextReplacing<double>(oversampledBlock);
 
-        if (!hpIsBypassed) {
-            highPassChain.process(ProcessContextReplacing<double>(oversampledBlock));
-        }
-        if (!lpIsBypassed) {
-            lowPassChain.process(ProcessContextReplacing<double>(oversampledBlock));
-        }
+        if (!hpIsBypassed) highPassChain.process(context);
+        if (!lpIsBypassed) lowPassChain.process(context);
 
         oversampler->processSamplesDown(doubleBlock);
     }
     else
     {
-        // STANDARD: Just process at 44.1k / 48k
+        // PUTANJA BEZ OVERSAMPLINGA (1x)
         auto context = ProcessContextReplacing<double>(doubleBlock);
-        if (!hpIsBypassed) {
-            highPassChain.process(context);
-        }
-        if (!lpIsBypassed) {
-            lowPassChain.process(context);
-        }	
+
+        if (!hpIsBypassed) highPassChain.process(context);
+        if (!lpIsBypassed) lowPassChain.process(context);
     }
     
     // Cast back to 32-bit (Double -> Float) for the DAW
@@ -280,10 +318,7 @@ void IIRFilterAudioProcessor::updateCoefficients(double sampleRate) {
         case 3: // Elliptic
 			ellipticCoefficients(lpCoeffs, hpCoeffs, lpCutoffDouble, hpCutoffDouble, filterOrder, sampleRate);
             break;
-		case 4: // Bessel 0Hz
-			besselCoefficients(lpCoeffs, hpCoeffs, lpCutoffDouble, hpCutoffDouble, filterOrder, sampleRate);
-            break;
-        case 5: // Bessel -3dB
+		case 4: // Bessel -3dB
 			besselCoefficients(lpCoeffs, hpCoeffs, lpCutoffDouble, hpCutoffDouble, filterOrder, sampleRate);
             break;
         default:
@@ -384,8 +419,8 @@ void IIRFilterAudioProcessor::butterworthCoefficients(std::vector<IIR::Coefficie
 
 void IIRFilterAudioProcessor::chebyshevICoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
-    // Setup Ripple (1.0 dB is a standard, musical choice for steepness)
-    const double rippleDB = 1.0;
+    // Setup Ripple (0.05 dB is a standard, musical choice for steepness)
+    const double rippleDB = 0.05;
     const double epsilon = std::sqrt(std::pow(10.0, rippleDB / 10.0) - 1.0);
     const double mu = (1.0 / filterOrder) * std::asinh(1.0 / epsilon);
     const double a_ellipse = std::sinh(mu);
@@ -397,7 +432,7 @@ void IIRFilterAudioProcessor::chebyshevICoefficients(std::vector<IIR::Coefficien
 
     // Loop through the pole pairs (Each pair creates one biquad)
     int numBiquads = filterOrder / 2;
-    for (int k = 1; k <= numBiquads; ++k)
+    for (int k = numBiquads; k >= 1; --k)
     {
         // Calculate angle for this specific pole
         double angle = (MathConstants<double>::pi * (2.0 * k - 1.0)) / (2.0 * filterOrder);
@@ -474,7 +509,7 @@ void IIRFilterAudioProcessor::chebyshevICoefficients(std::vector<IIR::Coefficien
 void IIRFilterAudioProcessor::chebyshevIICoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
     // Setup Stopband Attenuation (e.g., 40dB of rejection)
-    const double stopbandAttenDB = 40.0 + 10.0 * filterOrder/2;
+    const double stopbandAttenDB = 90.0;
 
     // The epsilon calculation is inverted for Type II
     const double epsilon = 1.0 / std::sqrt(std::pow(10.0, stopbandAttenDB / 10.0) - 1.0);
@@ -482,12 +517,22 @@ void IIRFilterAudioProcessor::chebyshevIICoefficients(std::vector<IIR::Coefficie
     const double a_ellipse = std::sinh(mu);
     const double b_ellipse = std::cosh(mu);
 
-    // Pre-warp frequencies
-    const double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate);
-    const double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate);
+    // ==========================================
+    // THE FIX: 3dB Point Shift Correction
+    // ==========================================
+    // Chebyshev II defines 'cutoff' as the start of the stopband (-90dB).
+    // We calculate the exact ratio needed to push the -3dB point to the user's cutoff.
+    const double correction = std::cosh((1.0 / filterOrder) * std::acosh(1.0 / epsilon));
+
+    // Pre-warp frequencies WITH CORRECTION
+    // LP pushes the stopband HIGHER so -3dB lands on the target
+    const double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate) * correction;
+
+    // HP pushes the stopband LOWER so -3dB lands on the target
+    const double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate) / correction;
 
     int numBiquads = filterOrder / 2;
-    for (int k = 1; k <= numBiquads; ++k)
+    for (int k = numBiquads; k >= 1; --k)
     {
         double angle = (MathConstants<double>::pi * (2.0 * k - 1.0)) / (2.0 * filterOrder);
 
@@ -573,8 +618,8 @@ void IIRFilterAudioProcessor::ellipticCoefficients(std::vector<IIR::Coefficients
     double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate);
     double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate);
 
-    // Assuming our prototype was generated with 1.0 dB passband ripple
-    const double rippleDB = 2.0;
+    // Assuming our prototype was generated with 0.01 dB passband ripple
+    const double rippleDB = 0.01;
     int stageIndex = 0;
 
     // Loop over the returned roots (1 loop for 2nd order, 4 loops for 8th order)
@@ -645,70 +690,45 @@ void IIRFilterAudioProcessor::ellipticCoefficients(std::vector<IIR::Coefficients
 }
 
 // =========================================================
-// ELLIPTIC LOOKUP TABLE (Normalized for 1dB Pass / 50dB Stop)
+// ELLIPTIC LOOKUP TABLE (Normalized for 0.01dB Pass / 120dB Stop)
 // =========================================================
 std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getEllipticProto(int filterOrder) {
     std::vector<IIRFilterAudioProcessor::Root> roots;
     switch (filterOrder) {
     case 2:
-        roots.push_back({ std::complex<double>(-0.5478900655, 0.8967136436), std::complex<double>(0.0, 17.6416573870) });
+        roots.push_back({ std::complex<double>(-2.2277287881, 2.3373287377), std::complex<double>(0.0, 573.8605702988) });
         break;
     case 4:
-        roots.push_back({ std::complex<double>(-0.3528715618, 0.4466760060), std::complex<double>(0.0, 2.0425534127) });
-        roots.push_back({ std::complex<double>(-0.1194893324, 0.9897673273), std::complex<double>(0.0, 4.6644397106) });
+        roots.push_back({ std::complex<double>(-0.9944487180, 0.5665283614), std::complex<double>(0.0, 10.9247873576) });
+        roots.push_back({ std::complex<double>(-0.4064867596, 1.3544143972), std::complex<double>(0.0, 26.3288778060) });
         break;
     case 6:
-        roots.push_back({ std::complex<double>(-0.2896601785, 0.3601789200), std::complex<double>(0.0, 1.2215575156) });
-        roots.push_back({ std::complex<double>(-0.1364518242, 0.8345761842), std::complex<double>(0.0, 1.4934211275) });
-        roots.push_back({ std::complex<double>(-0.0331836089, 0.9983145524), std::complex<double>(0.0, 3.5928449672) });
+        roots.push_back({ std::complex<double>(-0.6607932939, 0.3301988133), std::complex<double>(0.0, 3.1241382659) });
+        roots.push_back({ std::complex<double>(-0.4552878661, 0.8707947130), std::complex<double>(0.0, 4.2151778631) });
+        roots.push_back({ std::complex<double>(-0.1571211787, 1.1502288657), std::complex<double>(0.0, 11.3726915827) });
         break;
     case 8:
-        roots.push_back({ std::complex<double>(-0.2721701727, 0.3379520000), std::complex<double>(0.0, 1.0582200077) });
-        roots.push_back({ std::complex<double>(-0.1311677395, 0.7858076585), std::complex<double>(0.0, 1.1194508835) });
-        roots.push_back({ std::complex<double>(-0.0431380175, 0.9526164553), std::complex<double>(0.0, 1.3904007784) });
-        roots.push_back({ std::complex<double>(-0.0093822327, 0.9996289522), std::complex<double>(0.0, 3.3588850329) });
+        roots.push_back({ std::complex<double>(-0.5264857019, 0.2543830300), std::complex<double>(0.0, 1.7740942066) });
+        roots.push_back({ std::complex<double>(-0.3992185058, 0.6846748804), std::complex<double>(0.0, 2.0402871560) });
+        roots.push_back({ std::complex<double>(-0.2295483943, 0.9532094056), std::complex<double>(0.0, 2.9424264146) });
+        roots.push_back({ std::complex<double>(-0.0728062122, 1.0731357730), std::complex<double>(0.0, 8.1552933035) });
         break;
     default:
         break;
     }
+
     return roots;
 }
 
 void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
     int besselType = static_cast<int>(parameters.getRawParameterValue("approximation")->load());
-	double internalSampleRate = sampleRate;
 
-    if (besselType == 4) {
-        internalSampleRate = sampleRate * 4.0;
-
-        // Adjust the frequencies to match the Bessel prototype's definition of "cutoff" at -3dB
-        double kn = 1.0;
-        switch (filterOrder) {
-        case 2: // 1 Biquad(s)
-            kn = 0.734400887073410;
-            break;
-        case 4: // 2 Biquad(s)
-            kn = 0.473055319257907;
-            break;
-        case 6: // 3 Biquad(s)
-            kn = 0.369905240484611;
-            break;
-        case 8: // 4 Biquad(s)
-            kn = 0.314503264273131;
-            break;
-        }
-
-        hpCutoff /= kn;
-        lpCutoff *= kn;
-    }
-
-    // Fetch the Phase-Normalized Bessel poles
     auto proto = getBesselProto(filterOrder);
 
     // Pre-warp frequencies for Bilinear Transform
-    double lpW = std::tan(MathConstants<double>::pi * lpCutoff / internalSampleRate);
-    double hpW = std::tan(MathConstants<double>::pi * hpCutoff / internalSampleRate);
+    double lpW = std::tan(MathConstants<double>::pi * lpCutoff / sampleRate);
+    double hpW = std::tan(MathConstants<double>::pi * hpCutoff / sampleRate);
 
     for (const auto& root : proto)
     {
@@ -768,58 +788,29 @@ std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getBesselPro
 {
     std::vector<IIRFilterAudioProcessor::Root> roots;
     int besselType = static_cast<int>(parameters.getRawParameterValue("approximation")->load());
-    if (besselType == 4) {
-        // --- Bessel Analog Prototype Poles (Phase Normalized) ---
-		switch (filterOrder) {
-        case 2: // 1 Biquad(s)
-            roots.push_back({ std::complex<double>(-1.500000000000000, 0.866025403784439), std::complex<double>(0.0, 0.0) });
-            break;
+    // --- Frequency-Normalized Bessel Prototype Poles (-3dB at 1 rad/s) ---
+    switch (filterOrder) {
+    case 2: // 1 Biquad(s)
+        roots.push_back({ std::complex<double>(-1.101601330592161, 0.636009824757034), std::complex<double>(0.0, 0.0) });
+        break;
 
-        case 4: // 2 Biquad(s)
-            roots.push_back({ std::complex<double>(-2.896210602820372, 0.867234128934503), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-2.103789397179627, 2.657418041856752), std::complex<double>(0.0, 0.0) });
-            break;
+    case 4: // 2 Biquad(s)
+        roots.push_back({ std::complex<double>(-1.370067830551442, 0.410249717493751), std::complex<double>(0.0, 0.0) });
+        roots.push_back({ std::complex<double>(-0.995208764350272, 1.257105739454664), std::complex<double>(0.0, 0.0) });
+        break;
 
-        case 6: // 3 Biquad(s)
-            roots.push_back({ std::complex<double>(-4.248359395863364, 0.867509673231366), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-3.735708356325814, 2.626272311447126), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-2.515932247810821, 4.492672953653943), std::complex<double>(0.0, 0.0) });
-            break;
+    case 6: // 3 Biquad(s)
+        roots.push_back({ std::complex<double>(-1.571490403616031, 0.320896374222624), std::complex<double>(0.0, 0.0) });
+        roots.push_back({ std::complex<double>(-1.381858097596563, 0.971471890711571), std::complex<double>(0.0, 0.0) });
+        roots.push_back({ std::complex<double>(-0.930656522946859, 1.661863268942591), std::complex<double>(0.0, 0.0) });
+        break;
 
-        case 8: // 4 Biquad(s)
-            roots.push_back({ std::complex<double>(-5.587886043263086, 0.867614445352787), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-5.204840790636881, 2.616175152642527), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-4.368289217202402, 4.414442500471539), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-2.838983948897632, 6.353911298604878), std::complex<double>(0.0, 0.0) });
-            break;
-        }
-    }
-
-    else if (besselType == 5) {
-        // --- Frequency-Normalized Bessel Prototype Poles (-3dB at 1 rad/s) ---
-        switch (filterOrder) {
-        case 2: // 1 Biquad(s)
-            roots.push_back({ std::complex<double>(-1.101601330592161, 0.636009824757034), std::complex<double>(0.0, 0.0) });
-            break;
-
-        case 4: // 2 Biquad(s)
-            roots.push_back({ std::complex<double>(-1.370067830551442, 0.410249717493751), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-0.995208764350272, 1.257105739454664), std::complex<double>(0.0, 0.0) });
-            break;
-
-        case 6: // 3 Biquad(s)
-            roots.push_back({ std::complex<double>(-1.571490403616031, 0.320896374222624), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-1.381858097596563, 0.971471890711571), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-0.930656522946859, 1.661863268942591), std::complex<double>(0.0, 0.0) });
-            break;
-
-        case 8: // 4 Biquad(s)
-            roots.push_back({ std::complex<double>(-1.757408400401652, 0.272867575102233), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-1.636939418126887, 0.822795625139699), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-1.373841217637376, 1.388356575877562), std::complex<double>(0.0, 0.0) });
-            roots.push_back({ std::complex<double>(-0.892869718847137, 1.998325843641306), std::complex<double>(0.0, 0.0) });
-            break;
-        }
+    case 8: // 4 Biquad(s)
+        roots.push_back({ std::complex<double>(-1.757408400401652, 0.272867575102233), std::complex<double>(0.0, 0.0) });
+        roots.push_back({ std::complex<double>(-1.636939418126887, 0.822795625139699), std::complex<double>(0.0, 0.0) });
+        roots.push_back({ std::complex<double>(-1.373841217637376, 1.388356575877562), std::complex<double>(0.0, 0.0) });
+        roots.push_back({ std::complex<double>(-0.892869718847137, 1.998325843641306), std::complex<double>(0.0, 0.0) });
+        break;
     }
     return roots;
 }
@@ -843,7 +834,7 @@ AudioProcessorValueTreeState::ParameterLayout IIRFilterAudioProcessor::createPar
     layout.add(std::make_unique<AudioParameterChoice>(
         "approximation",
         "Filter Approximation Type",
-        StringArray{ "Butterworth", "Chebyshev I", "Chebyshev II", "Elliptic", "Bessel 0Hz", "Bessel -3dB"},
+        StringArray{ "Butterworth", "Chebyshev I", "Chebyshev II", "Elliptic", "Bessel"},
         0
 	));
     layout.add(std::make_unique<juce::AudioParameterBool>("bypassHp", "Bypass HP", false));
