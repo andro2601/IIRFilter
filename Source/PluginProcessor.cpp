@@ -100,20 +100,24 @@ void IIRFilterAudioProcessor::changeProgramName (int index, const String& newNam
 //==============================================================================
 void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // 1. Dinamičko određivanje faktora oversamplinga
+    // 1. Dinamičko određivanje faktora oversamplingas
     int oversamplingFactorLog2 = 0;
-
+    
+	if (sampleRate >= 192000.0) {
+		oversamplingFactorLog2 = 0; // Ne treba oversampling (1x)
+		currentOversamplingRatio = 1;
+	}
     if (sampleRate >= 88100.0) {
-        oversamplingFactorLog2 = 0; // Ne treba oversampling (1x)
-        currentOversamplingRatio = 1;
-    }
-    else if (sampleRate >= 44100.0) {
-        oversamplingFactorLog2 = 1; // 2x oversampling (2^1 = 2)
+		oversamplingFactorLog2 = 1; // 2x oversampling (2^1 = 2)
         currentOversamplingRatio = 2;
     }
-    else {
-        oversamplingFactorLog2 = 2; // 4x oversampling (2^2 = 4) za ultra niske SR
+    else if (sampleRate >= 44100.0) {
+        oversamplingFactorLog2 = 2; // 4x oversampling (2^2 = 4)
         currentOversamplingRatio = 4;
+    }
+    else {
+        oversamplingFactorLog2 = 3; // 8x oversampling (2^3 = 8) za ultra niske SR
+        currentOversamplingRatio = 8;
     }
 
     // 2. Inicijalizacija Oversamplera (samo ako je ratio > 1)
@@ -121,7 +125,7 @@ void IIRFilterAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
         oversampler = std::make_unique<Oversampling<double>>(
             getMainBusNumOutputChannels(),
             oversamplingFactorLog2,
-            Oversampling<double>::filterHalfBandPolyphaseIIR
+			Oversampling<double>::filterHalfBandFIREquiripple
         );
         oversampler->initProcessing(samplesPerBlock);
     }
@@ -722,8 +726,6 @@ std::vector<IIRFilterAudioProcessor::Root> IIRFilterAudioProcessor::getEllipticP
 
 void IIRFilterAudioProcessor::besselCoefficients(std::vector<IIR::Coefficients<double>>& lpCoeffs, std::vector<IIR::Coefficients<double>>& hpCoeffs, double lpCutoff, double hpCutoff, int filterOrder, double sampleRate)
 {
-    int besselType = static_cast<int>(parameters.getRawParameterValue("approximation")->load());
-
     auto proto = getBesselProto(filterOrder);
 
     // Pre-warp frequencies for Bilinear Transform
