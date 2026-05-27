@@ -1,5 +1,5 @@
 # IIRFilter
-A high-performance, precision IIR high-pass and low-pass filter plugin built with the JUCE framework. This plugin offers 6 different analog filter approximations, utilizing the Bilinear Transform with exact frequency pre-warping.
+A high-performance, precision IIR high-pass and low-pass filter plugin built with the JUCE framework. This plugin offers 5 different analog filter approximations, utilizing the Bilinear Transform with exact frequency pre-warping.
 
 To ensure mathematical accuracy and stability, the complex pole-zero prototypes for Elliptic and Bessel filters are pre-calculated using custom Python scripts (scipy.signal) and embedded directly into the C++ DSP code as Look-Up Tables (LUTs).
 The chosen design method for this filter is the Bilinear Transform, allowing the user to choose between the following approximations:
@@ -15,9 +15,6 @@ The inverse of Type I. It features a perfectly flat passband but allows ripples 
 
 ## Elliptic (Cauer)
 The most aggressive filter design. It allows ripples in both the passband and the stopband to achieve the absolute steepest possible transition between the two. This comes at the cost of severe non-linear phase distortion and time-domain ringing.
-
-## Bessel 0Hz
-The true zero-overshoot prototype. It scales the poles to ensure the group delay remains as flat as possible at DC (0Hz), meaning the time-domain pulse shape remains perfectly consistent across all filter orders. Custom Python-generated correction factors are applied in C++ to align the cutoff frequency accurately.
 
 ## Bessel -3dB
 Unlike the filters above which prioritize frequency separation, the Bessel prioritizes the time domain. It features a maximally linear phase response, which preserves the shape of transient signals without smearing them. This variant is frequency-normalized so the -3dB point stays locked to the UI slider.
